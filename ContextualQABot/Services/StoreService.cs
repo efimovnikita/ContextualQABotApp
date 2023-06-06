@@ -69,7 +69,7 @@ public class StoreService : IStoreService
         {
             ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
             LiteFileInfo<string>? fileInfo = GetUserFiles(fs, userId).FirstOrDefault();
-            return fileInfo == null ? "<not set>" : fileInfo.Filename;
+            return fileInfo == null ? "<not set>" : fileInfo.Metadata["name"];
         }
     }
 
@@ -116,7 +116,8 @@ public class StoreService : IStoreService
         ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
         DeleteExistingFiles(fs, userId);
 
-        fs.Upload(id: $"$/files/{userId}/{fileInfo.Name}", filename: fileInfo.FullName);
+        LiteFileInfo<string> liteFileInfo = fs.Upload(id: $"$/files/{userId}/{fileInfo.Name}", filename: fileInfo.FullName);
+        fs.SetMetadata(liteFileInfo.Id, new BsonDocument { { "name", new BsonValue(fileInfo.Name)} });
     }
 
     private void DeleteExistingFiles(ILiteStorage<string> liteStorage, int userId)
