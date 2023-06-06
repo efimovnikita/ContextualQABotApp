@@ -103,15 +103,6 @@ public class StoreService : IStoreService
 
     public void SetFile(int userId, FileInfo fileInfo)
     {
-        void DeleteExistingFiles(ILiteStorage<string> liteStorage)
-        {
-            LiteFileInfo<string>[] userFiles = GetUserFiles(liteStorage, userId);
-            foreach (LiteFileInfo<string> file in userFiles)
-            {
-                liteStorage.Delete(file.Id);
-            }
-        }
-
         using LiteDatabase db = new(_connection);
         ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);      
         _logger.LogInformation("Trying to find user with id - {ID}", userId);
@@ -123,9 +114,25 @@ public class StoreService : IStoreService
         }
         
         ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
-        DeleteExistingFiles(fs);
+        DeleteExistingFiles(fs, userId);
 
         fs.Upload(id: $"$/files/{userId}/{fileInfo.Name}", filename: fileInfo.FullName);
+    }
+
+    private void DeleteExistingFiles(ILiteStorage<string> liteStorage, int userId)
+    {
+        LiteFileInfo<string>[] userFiles = GetUserFiles(liteStorage, userId);
+        foreach (LiteFileInfo<string> file in userFiles)
+        {
+            liteStorage.Delete(file.Id);
+        }
+    }
+
+    public void ResetFile(int userId)
+    {
+        using LiteDatabase db = new(_connection);
+        ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
+        DeleteExistingFiles(fs, userId);
     }
 
     private static LiteFileInfo<string>[] GetUserFiles(ILiteStorage<string> liteStorage, int userId)

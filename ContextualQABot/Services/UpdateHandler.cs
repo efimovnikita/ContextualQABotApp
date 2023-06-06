@@ -8,6 +8,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.InlineQueryResults;
 using Telegram.Bot.Types.ReplyMarkups;
+using File = Telegram.Bot.Types.File;
 
 namespace ContextualQABot.Services;
 
@@ -47,7 +48,101 @@ public class UpdateHandler : IUpdateHandler
 
     private async Task BotOnMessageReceived(Message message, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Receive message type: {MessageType}", message.Type);
+        MessageType messageType = message.Type;
+        _logger.LogInformation("Receive message type: {MessageType}", messageType);
+
+        switch (messageType)
+        {
+            case MessageType.Text:
+            {
+                await ProcessText(message, cancellationToken);
+                return;
+            }
+            case MessageType.Document:
+                await ProcessDocument(message, cancellationToken);
+                break;
+            default:
+                await Usage(_botClient, message, cancellationToken);
+                break;
+        }
+    }
+
+    private async Task ProcessDocument(Message message, CancellationToken cancellationToken)
+    {
+        if (message.Document is not { } messageDocument)
+        {
+            return;
+        }
+
+        string? mimeType = messageDocument.MimeType;
+        _logger.LogInformation("Received document type is: {DocType}", mimeType);
+        Task<Message> action = mimeType switch
+        {
+            "text/plain" => ProcessPlainTextDocument(_botClient, message, cancellationToken),
+            "text/html" => ProcessHtmlDocument(_botClient, message, cancellationToken),
+            _ => SendFileUnsupportedMessage(_botClient, message, cancellationToken)
+        };
+
+        async Task<Message> ProcessHtmlDocument(ITelegramBotClient botClient, Message msg, CancellationToken token)
+        {
+            return await SimpleUpload(botClient, msg, token);
+        }
+
+        async Task<Message> ProcessPlainTextDocument(ITelegramBotClient botClient, Message msg, CancellationToken token)
+        {
+            return await SimpleUpload(botClient, msg, token);
+        }
+
+        async Task<Message> SendFileUnsupportedMessage(ITelegramBotClient botClient, Message msg,
+            CancellationToken token)
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "This file type is unsupported",
+                cancellationToken: token);
+        }
+    }
+
+    private async Task<Message> SimpleUpload(ITelegramBotClient botClient, Message msg, CancellationToken token)
+    {
+        File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken: token);
+
+        string tempDirectoryPath = Path.GetTempPath();
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+
+        string filePath = Path.Combine(subDirectoryPath, msg.Document.FileName!);
+
+        using (FileStream fileStream = System.IO.File.Open(filePath, FileMode.Create))
+        {
+            await botClient.DownloadFileAsync(file.FilePath!, fileStream, token);
+        }
+
+        if (System.IO.File.Exists(filePath) == false)
+        {
+            Directory.Delete(subDirectoryPath, true);
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+
+        int fromId = (int) msg.From!.Id;
+        _storeService.SetFile(fromId, new FileInfo(filePath));
+
+        Directory.Delete(subDirectoryPath, true);
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "File was set",
+            cancellationToken: token);
+    }
+
+    private async Task ProcessText(Message message, CancellationToken cancellationToken)
+    {
         if (message.Text is not { } messageText)
         {
             return;
@@ -57,19 +152,32 @@ public class UpdateHandler : IUpdateHandler
         Task<Message> action = split[0] switch
         {
             "/inline_keyboard" => SendInlineKeyboard(_botClient, message, cancellationToken),
-            "/keyboard"        => SendReplyKeyboard(_botClient, message, cancellationToken),
-            "/remove"          => RemoveKeyboard(_botClient, message, cancellationToken),
-            "/photo"           => SendFile(_botClient, message, cancellationToken),
-            "/request"         => RequestContactAndLocation(_botClient, message, cancellationToken),
-            "/inline_mode"     => StartInlineQuery(_botClient, message, cancellationToken),
-            "/info"            => GetUserInfo(_botClient, message, cancellationToken),
-            "/reset_key"       => ResetUserKey(_botClient, message, cancellationToken),
-            "/set_key"         => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
-            "/throw"           => FailingHandler(_botClient, message, cancellationToken),
-            _                  => Usage(_botClient, message, cancellationToken)
+            "/keyboard" => SendReplyKeyboard(_botClient, message, cancellationToken),
+            "/remove" => RemoveKeyboard(_botClient, message, cancellationToken),
+            "/photo" => SendFile(_botClient, message, cancellationToken),
+            "/request" => RequestContactAndLocation(_botClient, message, cancellationToken),
+            "/inline_mode" => StartInlineQuery(_botClient, message, cancellationToken),
+            "/info" => GetUserInfo(_botClient, message, cancellationToken),
+            "/reset_key" => ResetUserKey(_botClient, message, cancellationToken),
+            "/set_key" => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
+            "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
+            "/throw" => FailingHandler(_botClient, message, cancellationToken),
+            _ => Usage(_botClient, message, cancellationToken)
         };
 
-        async Task<Message> SetUserKey(ITelegramBotClient botClient, Message message1, string keyComponent, CancellationToken cancellationToken1)
+        async Task<Message> ResetUserFile(ITelegramBotClient botClient, Message msg, CancellationToken token)
+        {
+            int fromId = (int) msg.From!.Id;
+            _storeService.ResetFile(fromId);
+            
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Current file was deleted",
+                cancellationToken: token);
+        }
+
+        async Task<Message> SetUserKey(ITelegramBotClient botClient, Message message1, string keyComponent,
+            CancellationToken cancellationToken1)
         {
             if (IsValidPattern(keyComponent) == false)
             {
@@ -78,32 +186,33 @@ public class UpdateHandler : IUpdateHandler
                     text: "Open AI API key has invalid format. Try again",
                     cancellationToken: cancellationToken1);
             }
-            
+
             int fromId = (int) message1.From!.Id;
             _storeService.SetOpenAiKey(fromId, keyComponent);
-            
+
             return await botClient.SendTextMessageAsync(
                 chatId: message1.Chat.Id,
                 text: "Open AI API key was set",
                 cancellationToken: cancellationToken1);
-            
+
             static bool IsValidPattern(string input)
             {
                 string pattern = @"^sk-[a-zA-Z0-9_-]{48}$"; // Corrected regular expression pattern
 
                 // Create a new Regex object
                 Regex r = new(pattern, RegexOptions.None);
-        
+
                 // Validate input string with pattern
                 return r.IsMatch(input);
             }
         }
 
-        async Task<Message> ResetUserKey(ITelegramBotClient botClient, Message message1, CancellationToken cancellationToken1)
+        async Task<Message> ResetUserKey(ITelegramBotClient botClient, Message message1,
+            CancellationToken cancellationToken1)
         {
             int fromId = (int) message1.From!.Id;
             _storeService.ResetOpenAiKey(fromId);
-            
+
             return await botClient.SendTextMessageAsync(
                 chatId: message1.Chat.Id,
                 text: "Open AI API key was reset",
@@ -114,7 +223,7 @@ public class UpdateHandler : IUpdateHandler
         {
             int fromId = (int) msg.From!.Id;
             string userInfo = _storeService.GetUserInfo(fromId);
-            
+
             return await botClient.SendTextMessageAsync(
                 chatId: message.Chat.Id,
                 text: userInfo,
@@ -126,7 +235,8 @@ public class UpdateHandler : IUpdateHandler
 
         // Send inline keyboard
         // You can process responses in BotOnCallbackQueryReceived handler
-        static async Task<Message> SendInlineKeyboard(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> SendInlineKeyboard(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             await botClient.SendChatActionAsync(
                 chatId: message.Chat.Id,
@@ -140,13 +250,13 @@ public class UpdateHandler : IUpdateHandler
                 new[]
                 {
                     // first row
-                    new []
+                    new[]
                     {
                         InlineKeyboardButton.WithCallbackData("1.1", "11"),
                         InlineKeyboardButton.WithCallbackData("1.2", "12"),
                     },
                     // second row
-                    new []
+                    new[]
                     {
                         InlineKeyboardButton.WithCallbackData("2.1", "21"),
                         InlineKeyboardButton.WithCallbackData("2.2", "22"),
@@ -160,13 +270,14 @@ public class UpdateHandler : IUpdateHandler
                 cancellationToken: cancellationToken);
         }
 
-        static async Task<Message> SendReplyKeyboard(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> SendReplyKeyboard(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             ReplyKeyboardMarkup replyKeyboardMarkup = new(
                 new[]
                 {
-                        new KeyboardButton[] { "1.1", "1.2" },
-                        new KeyboardButton[] { "2.1", "2.2" },
+                    new KeyboardButton[] {"1.1", "1.2"},
+                    new KeyboardButton[] {"2.1", "2.2"},
                 })
             {
                 ResizeKeyboard = true
@@ -179,7 +290,8 @@ public class UpdateHandler : IUpdateHandler
                 cancellationToken: cancellationToken);
         }
 
-        static async Task<Message> RemoveKeyboard(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> RemoveKeyboard(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             return await botClient.SendTextMessageAsync(
                 chatId: message.Chat.Id,
@@ -188,7 +300,8 @@ public class UpdateHandler : IUpdateHandler
                 cancellationToken: cancellationToken);
         }
 
-        static async Task<Message> SendFile(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> SendFile(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             await botClient.SendChatActionAsync(
                 message.Chat.Id,
@@ -206,7 +319,8 @@ public class UpdateHandler : IUpdateHandler
                 cancellationToken: cancellationToken);
         }
 
-        static async Task<Message> RequestContactAndLocation(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> RequestContactAndLocation(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             ReplyKeyboardMarkup requestReplyKeyboard = new(
                 new[]
@@ -222,27 +336,8 @@ public class UpdateHandler : IUpdateHandler
                 cancellationToken: cancellationToken);
         }
 
-        static async Task<Message> Usage(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
-        {
-            const string usage = "Usage:\n" +
-                                 "/inline_keyboard - send inline keyboard\n" +
-                                 "/keyboard    - send custom keyboard\n" +
-                                 "/remove      - remove custom keyboard\n" +
-                                 "/photo       - send a photo\n" +
-                                 "/request     - request location or contact\n" +
-                                 "/info        - request user info\n" +
-                                 "/set_key     - set Open AI API key\n" +
-                                 "/reset_key   - reset Open AI API key\n" +
-                                 "/inline_mode - send keyboard with Inline Query";
-
-            return await botClient.SendTextMessageAsync(
-                chatId: message.Chat.Id,
-                text: usage,
-                replyMarkup: new ReplyKeyboardRemove(),
-                cancellationToken: cancellationToken);
-        }
-
-        static async Task<Message> StartInlineQuery(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static async Task<Message> StartInlineQuery(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             InlineKeyboardMarkup inlineKeyboard = new(
                 InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("Inline Mode"));
@@ -256,12 +351,35 @@ public class UpdateHandler : IUpdateHandler
 
 #pragma warning disable RCS1163 // Unused parameter.
 #pragma warning disable IDE0060 // Remove unused parameter
-        static Task<Message> FailingHandler(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+        static Task<Message> FailingHandler(ITelegramBotClient botClient, Message message,
+            CancellationToken cancellationToken)
         {
             throw new IndexOutOfRangeException();
         }
 #pragma warning restore IDE0060 // Remove unused parameter
 #pragma warning restore RCS1163 // Unused parameter.
+        return;
+    }
+
+    private static async Task<Message> Usage(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+    {
+        const string usage = "Usage:\n" +
+                             "/inline_keyboard - send inline keyboard\n" +
+                             "/keyboard    - send custom keyboard\n" +
+                             "/remove      - remove custom keyboard\n" +
+                             "/photo       - send a photo\n" +
+                             "/request     - request location or contact\n" +
+                             "/info        - request user info\n" +
+                             "/set_key     - set Open AI API key\n" +
+                             "/reset_key   - reset Open AI API key\n" +
+                             "/reset_file  - reset file\n" +
+                             "/inline_mode - send keyboard with Inline Query";
+
+        return await botClient.SendTextMessageAsync(
+            chatId: message.Chat.Id,
+            text: usage,
+            replyMarkup: new ReplyKeyboardRemove(),
+            cancellationToken: cancellationToken);
     }
 
     // Process Inline Keyboard callback data
