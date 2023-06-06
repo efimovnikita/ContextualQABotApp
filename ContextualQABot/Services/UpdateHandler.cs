@@ -73,14 +73,25 @@ public class UpdateHandler : IUpdateHandler
         {
             return;
         }
+        
+        int fromId = (int) message.From!.Id;
+        string openAiKey = _storeService.GetOpenAiKey(fromId);
+        if (String.IsNullOrWhiteSpace(openAiKey) || IsValidPattern(openAiKey) == false)
+        {
+            await _botClient.SendTextMessageAsync(
+                chatId: message.Chat.Id,
+                text: "You must set an Open AI API key",
+                cancellationToken: cancellationToken);
+            return;
+        }
 
         string? mimeType = messageDocument.MimeType;
         _logger.LogInformation("Received document type is: {DocType}", mimeType);
-        Task<Message> action = mimeType switch
+        _ = mimeType switch
         {
-            "text/plain" => ProcessPlainTextDocument(_botClient, message, cancellationToken),
-            "text/html" => ProcessHtmlDocument(_botClient, message, cancellationToken),
-            _ => SendFileUnsupportedMessage(_botClient, message, cancellationToken)
+            "text/plain" => await ProcessPlainTextDocument(_botClient, message, cancellationToken),
+            "text/html" => await ProcessHtmlDocument(_botClient, message, cancellationToken),
+            _ => await SendFileUnsupportedMessage(_botClient, message, cancellationToken)
         };
 
         async Task<Message> ProcessHtmlDocument(ITelegramBotClient botClient, Message msg, CancellationToken token)
@@ -194,17 +205,6 @@ public class UpdateHandler : IUpdateHandler
                 chatId: message1.Chat.Id,
                 text: "Open AI API key was set",
                 cancellationToken: cancellationToken1);
-
-            static bool IsValidPattern(string input)
-            {
-                string pattern = @"^sk-[a-zA-Z0-9_-]{48}$"; // Corrected regular expression pattern
-
-                // Create a new Regex object
-                Regex r = new(pattern, RegexOptions.None);
-
-                // Validate input string with pattern
-                return r.IsMatch(input);
-            }
         }
 
         async Task<Message> ResetUserKey(ITelegramBotClient botClient, Message message1,
@@ -359,6 +359,17 @@ public class UpdateHandler : IUpdateHandler
 #pragma warning restore IDE0060 // Remove unused parameter
 #pragma warning restore RCS1163 // Unused parameter.
         return;
+    }
+
+    private static bool IsValidPattern(string input)
+    {
+        string pattern = @"^sk-[a-zA-Z0-9_-]{48}$"; // Corrected regular expression pattern
+
+        // Create a new Regex object
+        Regex r = new(pattern, RegexOptions.None);
+
+        // Validate input string with pattern
+        return r.IsMatch(input);
     }
 
     private static async Task<Message> Usage(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)

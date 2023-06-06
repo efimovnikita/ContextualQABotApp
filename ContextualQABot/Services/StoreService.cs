@@ -101,6 +101,23 @@ public class StoreService : IStoreService
         SetKey(userId, "");
     }
 
+    public string GetOpenAiKey(int userId)
+    {
+        using LiteDatabase db = new(_connection);
+        ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);        
+        _logger.LogInformation("Trying to find user with id - {ID}", userId);
+        BotUser? botUser = col.FindOne(user => user.Id.Equals(userId));
+        if (botUser != null)
+        {
+            return botUser.OpenAiApiKey;
+        }
+
+        botUser = new BotUser(userId);
+        col.Insert(botUser);
+
+        return "";
+    }
+
     public void SetFile(int userId, FileInfo fileInfo)
     {
         using LiteDatabase db = new(_connection);
