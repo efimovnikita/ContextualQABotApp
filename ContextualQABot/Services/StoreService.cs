@@ -1,0 +1,135 @@
+using System.Reflection;
+using ContextualQABot.Abstract;
+using ContextualQABot.Models;
+using LiteDB;
+using Microsoft.Extensions.Logging;
+
+namespace ContextualQABot.Services;
+
+public class StoreService : IStoreService
+{
+    private const string FilesCollectionName = "files";
+    private const string ChunksCollectionName = "chunks";
+    private const string UsersCollectionName = "users";
+    private readonly ILogger<StoreService> _logger;
+    private readonly string _connection;
+    public StoreService(ILogger<StoreService> logger)
+    {
+        _logger = logger;
+        
+        string? execPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+
+        string? dbDir = Environment.GetEnvironmentVariable("DB_DIR");
+        string? dbName = Environment.GetEnvironmentVariable("DB_NAME");
+
+        if (new [] { dbDir, dbName }.Any(String.IsNullOrEmpty))
+        {
+            throw new ArgumentException("DB_DIR or DB_NAME env vars didn't set");
+        }
+
+        string connection = Path.Combine(execPath!, dbDir!, dbName!);
+        _logger.LogInformation("DB connection string is: {Con}", connection);
+        _connection = connection;
+    }
+
+    public string GetUserInfo(int userId)
+    {
+        string UserInfo()
+        {
+            string s;
+            s = GetKey();
+            string fileName = GetFileName();
+            return $"Your Open AI API Key: {s}\n" + $"Current file: {fileName}";
+        }
+
+        using LiteDatabase db = new(_connection);
+        ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);
+        
+        _logger.LogInformation("Trying to find user with id - {ID}", userId);
+        BotUser? botUser = col.FindOne(user => user.Id.Equals(userId));
+        if (botUser != null)
+        {
+            return UserInfo();
+        }
+
+        _logger.LogInformation("User didn't found. Creating new user");
+        botUser = new BotUser(userId);
+        col.Insert(botUser);
+
+        return UserInfo();
+
+        string GetKey()
+        {
+            return String.IsNullOrWhiteSpace(botUser.OpenAiApiKey) == false ?
+                botUser.OpenAiApiKey : 
+                "<not set>";
+        }
+
+        string GetFileName()
+        {
+            ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
+            LiteFileInfo<string>? fileInfo = GetUserFiles(fs, userId).FirstOrDefault();
+            return fileInfo == null ? "<not set>" : fileInfo.Filename;
+        }
+    }
+
+    public void SetOpenAiKey(int userId, string key)
+    {
+        SetKey(userId, key);
+    }
+
+    private void SetKey(int userId, string key)
+    {
+        using LiteDatabase db = new(_connection);
+        ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);        
+        _logger.LogInformation("Trying to find user with id - {ID}", userId);
+        BotUser? botUser = col.FindOne(user => user.Id.Equals(userId));
+        if (botUser == null)
+        {
+            botUser = new BotUser(userId, key);
+            col.Insert(botUser);
+
+            return;
+        }
+
+        botUser.OpenAiApiKey = key;
+        col.Update(botUser);
+    }
+
+    public void ResetOpenAiKey(int userId)
+    {
+        SetKey(userId, "");
+    }
+
+    public void SetFile(int userId, FileInfo fileInfo)
+    {
+        void DeleteExistingFiles(ILiteStorage<string> liteStorage)
+        {
+            LiteFileInfo<string>[] userFiles = GetUserFiles(liteStorage, userId);
+            foreach (LiteFileInfo<string> file in userFiles)
+            {
+                liteStorage.Delete(file.Id);
+            }
+        }
+
+        using LiteDatabase db = new(_connection);
+        ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);      
+        _logger.LogInformation("Trying to find user with id - {ID}", userId);
+        BotUser? botUser = col.FindOne(user => user.Id.Equals(userId));
+        if (botUser == null)
+        {
+            botUser = new BotUser(userId);
+            col.Insert(botUser);
+        }
+        
+        ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
+        DeleteExistingFiles(fs);
+
+        fs.Upload(id: $"$/files/{userId}/{fileInfo.Name}", filename: fileInfo.FullName);
+    }
+
+    private static LiteFileInfo<string>[] GetUserFiles(ILiteStorage<string> liteStorage, int userId)
+    {
+        return liteStorage.Find(info => info.Id.Contains(userId.ToString())).ToArray();
+    }
+}
