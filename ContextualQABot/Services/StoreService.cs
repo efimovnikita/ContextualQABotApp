@@ -36,10 +36,9 @@ public class StoreService : IStoreService
     {
         string UserInfo()
         {
-            string s;
-            s = GetKey();
+            string key = GetKey();
             string fileName = GetFileName();
-            return $"*Your Open AI API Key:* ```{s}```\n" + $"*Current file:* ```{fileName}```";
+            return $"*Your Open AI API Key:* ```{key}```\n" + $"*Current file:* ```{fileName}```";
         }
 
         using LiteDatabase db = new(_connection);
