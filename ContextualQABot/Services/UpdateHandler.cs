@@ -243,7 +243,7 @@ File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken
 
         // Copy all the .html and .htm files & Replaces any files with the same name
         foreach (string file in Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories)
-                     .Where(file => new string[] { ".html", ".htm" }.Contains(Path.GetExtension(file))))
+                     .Where(file => new[] { ".html", ".htm" }.Contains(Path.GetExtension(file))))
         {
             string fileName = Path.GetFileName(file);
             System.IO.File.Copy(file, Path.Combine(targetDir, fileName), true);
@@ -388,6 +388,7 @@ File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken
             "/set_key" => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
             "/ask" => AskLlm(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", cancellationToken),
             "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
+            "/usage" => Usage(_botClient, message, cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
 
@@ -583,6 +584,7 @@ File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken
                              "/set_key     - set Open AI API key\n" +
                              "/reset_key   - reset Open AI API key\n" +
                              "/ask         - ask about something in a context of your file\n" +
+                             "/usage       - how to use this bot\n" +
                              "/reset_file  - reset file\n";
 
         return await botClient.SendTextMessageAsync(
