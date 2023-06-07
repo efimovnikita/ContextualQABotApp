@@ -94,8 +94,160 @@ public class UpdateHandler : IUpdateHandler
         _ = mimeType switch
         {
             "text/plain" => await ProcessPlainTextDocument(_botClient, message, openAiKey, cancellationToken),
+            "application/vnd.ms-htmlhelp" => await ProcessChmDocument(_botClient, message, openAiKey, cancellationToken),
             _ => await SendFileUnsupportedMessage(_botClient, message, cancellationToken)
         };
+    }
+
+    private async Task<Message> ProcessChmDocument(ITelegramBotClient botClient, Message msg, string key, CancellationToken token)
+    {
+File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken: token);
+
+        string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+        string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+        tempDirectoryPath = execAssemblyDir;
+#endif
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+            
+        // Create sources folder inside temp dir
+        string sourcesDir = Path.Combine(subDirectoryPath, "sources");
+        Directory.CreateDirectory(sourcesDir);
+
+        string filePath = Path.Combine(sourcesDir, msg.Document.FileName!);
+
+        using (FileStream fileStream = System.IO.File.Open(filePath, FileMode.Create))
+        {
+            await botClient.DownloadFileAsync(file.FilePath!, fileStream, token);
+        }
+
+        if (System.IO.File.Exists(filePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+
+        const string scriptFilename = "create_storage_from_htms.py";
+        const string scriptsFolderName = "Scripts";
+        string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+        if (System.IO.File.Exists(scriptSourcePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+            
+        string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+        System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+        string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+        if (String.IsNullOrWhiteSpace(pythonExec))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Python env var bot set. Try again",
+                cancellationToken: token);
+        }
+
+        string decompiledDirName = "decompiled";
+        string decompiledDir = Path.Combine(sourcesDir, decompiledDirName);
+
+        Command decompileCommand = Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(sourcesDir)
+            .WithArguments(
+                $"-c \"extract_chmLib {msg.Document.FileName} {decompiledDirName}\"");
+        await decompileCommand.ExecuteBufferedAsync();
+
+        if (Directory.Exists(decompiledDir) == false)
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+
+        const string pureHtmlDirName = "pure_html";
+        string pureHtmlDir = Path.Combine(sourcesDir, pureHtmlDirName);
+
+        CopyHtmlFiles(decompiledDir, pureHtmlDir);
+
+        Command cmd = Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(subDirectoryPath)
+            .WithArguments(
+                $"-c \"{pythonExec} {scriptFilename} --folder '{pureHtmlDir}' --key '{key}'\"");
+        await cmd.ExecuteBufferedAsync();
+        
+        const string dbFolderName = "db";
+        string dbFolderPath = Path.Combine(subDirectoryPath, dbFolderName);
+            
+        if (Directory.Exists(dbFolderPath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+
+        string dbArchivePath = Path.Combine(subDirectoryPath, $"{dbFolderName}.zip");
+        ZipFile.CreateFromDirectory(dbFolderPath, dbArchivePath);
+
+        if (System.IO.File.Exists(dbArchivePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error setting file. Try again",
+                cancellationToken: token);
+        }
+            
+        _storeService.SetFile((int) msg.From!.Id, 
+            Path.GetFileName(filePath), 
+            new FileInfo(dbArchivePath));
+            
+#if RELEASE
+            Directory.Delete(subDirectoryPath, true);
+#endif
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "File was set",
+            cancellationToken: token);
+    }
+
+    private static void CopyHtmlFiles(string sourceDir, string targetDir)
+    {
+        // Ensure target directory exists
+        Directory.CreateDirectory(targetDir);
+
+        // Copy all the .html and .htm files & Replaces any files with the same name
+        foreach (string file in Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories)
+                     .Where(file => new string[] { ".html", ".htm" }.Contains(Path.GetExtension(file))))
+        {
+            string fileName = Path.GetFileName(file);
+            System.IO.File.Copy(file, Path.Combine(targetDir, fileName), true);
+        }
     }
 
     private async Task<Message> SendFileUnsupportedMessage(ITelegramBotClient botClient, Message msg, CancellationToken token)
