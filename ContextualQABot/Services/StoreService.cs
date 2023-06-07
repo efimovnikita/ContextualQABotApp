@@ -161,6 +161,20 @@ public class StoreService : IStoreService
         return fileInfo != null;
     }
 
+    public bool SaveUserFile(int userId, string fullPath)
+    {
+        using LiteDatabase db = new(_connection);
+        ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
+        LiteFileInfo<string>? fileInfo = GetUserFiles(fs, userId).FirstOrDefault();
+        if (fileInfo == null)
+        {
+            return false;
+        }
+        
+        fileInfo.SaveAs(fullPath);
+        return File.Exists(fullPath);
+    }
+
     private static LiteFileInfo<string>[] GetUserFiles(ILiteStorage<string> liteStorage, int userId)
     {
         return liteStorage.Find(info => info.Id.Contains(userId.ToString())).ToArray();

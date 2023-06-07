@@ -9,4 +9,5 @@ public interface IStoreService
     void SetFile(int userId, string label, FileInfo fileInfo);
     void ResetFile(int userId);
     bool IsUserFileExist(int userId);
+    bool SaveUserFile(int userId, string fullPath);
 }

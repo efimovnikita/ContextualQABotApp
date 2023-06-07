@@ -234,7 +234,7 @@ public class UpdateHandler : IUpdateHandler
             "/info" => GetUserInfo(_botClient, message, cancellationToken),
             "/reset_key" => ResetUserKey(_botClient, message, cancellationToken),
             "/set_key" => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
-            "/ask" => AskLlm(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
+            "/ask" => AskLlm(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", cancellationToken),
             "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
@@ -257,12 +257,100 @@ public class UpdateHandler : IUpdateHandler
                     text: "Type your query after '/ask' keyword. Example '/ask give me an answer'",
                     cancellationToken: token);
             }
+
+            string key = _storeService.GetOpenAiKey(fromId);
+            if (String.IsNullOrWhiteSpace(key))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "You must set Open AI API key first",
+                    cancellationToken: token);
+            }
+
+            string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+            string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+            tempDirectoryPath = execAssemblyDir;
+#endif
+            string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+            string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+            // Create the subdirectory.
+            Directory.CreateDirectory(subDirectoryPath);
             
+            const string scriptFilename = "load_and_ask.py";
+            const string scriptsFolderName = "Scripts";
+            string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
             
+            if (System.IO.File.Exists(scriptSourcePath) == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking LLM. Try again",
+                    cancellationToken: token);
+            }
             
+            string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+            System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+            string archivePath = Path.Combine(subDirectoryPath, "db.zip");
+            bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
+            if (saveStatus == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking LLM. Try again",
+                    cancellationToken: token);
+            }
+
+            string dbDirPath = Path.Combine(subDirectoryPath, "db");
+            
+            ZipFile.ExtractToDirectory(archivePath, dbDirPath);
+            if (Directory.Exists(dbDirPath) == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking LLM. Try again",
+                    cancellationToken: token);
+            }
+            
+            string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+            if (String.IsNullOrWhiteSpace(pythonExec))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking LLM. Python env var bot set. Try again",
+                    cancellationToken: token);
+            }
+
+            BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
+                .WithWorkingDirectory(subDirectoryPath)
+                .WithArguments(
+                    $"-c \"{pythonExec} {scriptFilename} --query '{query}' --key '{key}'\"")
+                .ExecuteBufferedAsync();
+
+            string llmOutput = cmd.StandardOutput;
+
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+
             return await botClient.SendTextMessageAsync(
                 chatId: msg.Chat.Id,
-                text: "You can ask LLM",
+                text: llmOutput,
+                replyToMessageId: msg.MessageId,
                 cancellationToken: token);
         }
 
