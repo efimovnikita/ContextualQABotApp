@@ -556,6 +556,7 @@ File file = await botClient.GetFileAsync(msg.Document!.FileId, cancellationToken
 
             return await botClient.SendTextMessageAsync(
                 chatId: message.Chat.Id,
+                parseMode: ParseMode.MarkdownV2,
                 text: userInfo,
                 cancellationToken: token);
         }
