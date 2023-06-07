@@ -118,7 +118,7 @@ public class StoreService : IStoreService
         return "";
     }
 
-    public void SetFile(int userId, FileInfo fileInfo)
+    public void SetFile(int userId, string label, FileInfo fileInfo)
     {
         using LiteDatabase db = new(_connection);
         ILiteCollection<BotUser>? col = db.GetCollection<BotUser>(UsersCollectionName);      
@@ -134,7 +134,7 @@ public class StoreService : IStoreService
         DeleteExistingFiles(fs, userId);
 
         LiteFileInfo<string> liteFileInfo = fs.Upload(id: $"$/files/{userId}/{fileInfo.Name}", filename: fileInfo.FullName);
-        fs.SetMetadata(liteFileInfo.Id, new BsonDocument { { "name", new BsonValue(fileInfo.Name)} });
+        fs.SetMetadata(liteFileInfo.Id, new BsonDocument { { "name", new BsonValue(label)} });
     }
 
     private void DeleteExistingFiles(ILiteStorage<string> liteStorage, int userId)

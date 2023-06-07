@@ -6,6 +6,6 @@ public interface IStoreService
     void SetOpenAiKey(int userId, string key);
     void ResetOpenAiKey(int userId);
     string GetOpenAiKey(int userId);
-    void SetFile(int userId, FileInfo fileInfo);
+    void SetFile(int userId, string label, FileInfo fileInfo);
     void ResetFile(int userId);
 }
