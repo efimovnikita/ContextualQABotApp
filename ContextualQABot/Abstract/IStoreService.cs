@@ -8,4 +8,5 @@ public interface IStoreService
     string GetOpenAiKey(int userId);
     void SetFile(int userId, string label, FileInfo fileInfo);
     void ResetFile(int userId);
+    bool IsUserFileExist(int userId);
 }

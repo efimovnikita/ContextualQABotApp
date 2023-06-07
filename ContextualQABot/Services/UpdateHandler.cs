@@ -234,9 +234,37 @@ public class UpdateHandler : IUpdateHandler
             "/info" => GetUserInfo(_botClient, message, cancellationToken),
             "/reset_key" => ResetUserKey(_botClient, message, cancellationToken),
             "/set_key" => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
+            "/ask" => AskLlm(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
             "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
+
+        async Task<Message> AskLlm(ITelegramBotClient botClient, Message msg, string query, CancellationToken token)
+        {
+            int fromId = (int) msg.From!.Id;
+            if (_storeService.IsUserFileExist(fromId) == false)
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "You must upload file first",
+                    cancellationToken: token);
+            }
+
+            if (String.IsNullOrWhiteSpace(query))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Type your query after '/ask' keyword. Example '/ask give me an answer'",
+                    cancellationToken: token);
+            }
+            
+            
+            
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You can ask LLM",
+                cancellationToken: token);
+        }
 
         async Task<Message> ResetUserFile(ITelegramBotClient botClient, Message msg, CancellationToken token)
         {
@@ -313,6 +341,7 @@ public class UpdateHandler : IUpdateHandler
                              "/info        - request user info\n" +
                              "/set_key     - set Open AI API key\n" +
                              "/reset_key   - reset Open AI API key\n" +
+                             "/ask         - ask about something in a context of your file\n" +
                              "/reset_file  - reset file\n";
 
         return await botClient.SendTextMessageAsync(

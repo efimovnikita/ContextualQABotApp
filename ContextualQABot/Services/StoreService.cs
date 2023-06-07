@@ -153,6 +153,14 @@ public class StoreService : IStoreService
         DeleteExistingFiles(fs, userId);
     }
 
+    public bool IsUserFileExist(int userId)
+    {
+        using LiteDatabase db = new(_connection);
+        ILiteStorage<string>? fs = db.GetStorage<string>(FilesCollectionName, ChunksCollectionName);
+        LiteFileInfo<string>? fileInfo = GetUserFiles(fs, userId).FirstOrDefault();
+        return fileInfo != null;
+    }
+
     private static LiteFileInfo<string>[] GetUserFiles(ILiteStorage<string> liteStorage, int userId)
     {
         return liteStorage.Find(info => info.Id.Contains(userId.ToString())).ToArray();
