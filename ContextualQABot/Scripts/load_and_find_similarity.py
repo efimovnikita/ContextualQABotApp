@@ -1,4 +1,5 @@
 import argparse
+import json
 
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
@@ -19,5 +20,12 @@ persist_directory = 'db'
 # Now we can load the persisted database from disk, and use it as normal.
 vectordb = Chroma(persist_directory=persist_directory, embedding_function=embedding)
 similar_docs = vectordb.similarity_search(args.query, k=args.number)
+# for doc in similar_docs:
+#     print(doc.page_content)
+results = []
+
 for doc in similar_docs:
-    print(doc.page_content)
+    result = {'page_content': doc.page_content}
+    results.append(result)
+
+print(json.dumps(results))

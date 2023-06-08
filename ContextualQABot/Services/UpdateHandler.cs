@@ -5,6 +5,7 @@ using CliWrap;
 using CliWrap.Buffered;
 using ContextualQABot.Abstract;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
@@ -639,10 +640,25 @@ public class UpdateHandler : IUpdateHandler
 #if RELEASE
                 Directory.Delete(subDirectoryPath, true);
 #endif
+            
+            // Deserialize JSON string to a List of dictionary.
+            List<Dictionary<string, string>>? deserializedResult = JsonConvert.DeserializeObject<List<Dictionary<string, string>>>(llmOutput);
+
+            if (deserializedResult != null)
+            {
+                foreach (Dictionary<string, string> page in deserializedResult)
+                {
+                    await botClient.SendTextMessageAsync(
+                        chatId: msg.Chat.Id,
+                        text: page["page_content"],
+                        replyToMessageId: msg.MessageId,
+                        cancellationToken: token);
+                }
+            }
 
             return await botClient.SendTextMessageAsync(
                 chatId: msg.Chat.Id,
-                text: llmOutput,
+                text: "... end.",
                 replyToMessageId: msg.MessageId,
                 cancellationToken: token);
         }
