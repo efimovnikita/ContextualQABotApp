@@ -1,18 +1,11 @@
-﻿FROM mcr.microsoft.com/dotnet/runtime:6.0 AS base
+﻿FROM mcr.microsoft.com/dotnet/sdk:6.0-jammy
 WORKDIR /app
+COPY bin/Release/net6.0/publish .
+COPY requirements.txt .
 
-FROM mcr.microsoft.com/dotnet/sdk:6.0 AS build
-WORKDIR /src
-COPY ["ContextualQABot/ContextualQABot.csproj", "ContextualQABot/"]
-RUN dotnet restore "ContextualQABot/ContextualQABot.csproj"
-COPY . .
-WORKDIR "/src/ContextualQABot"
-RUN dotnet build "ContextualQABot.csproj" -c Release -o /app/build
+RUN apt-get update && apt-get install -y python3 python3-pip
+RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get install libchm-bin -y
+RUN which python3
 
-FROM build AS publish
-RUN dotnet publish "ContextualQABot.csproj" -c Release -o /app/publish /p:UseAppHost=false
-
-FROM base AS final
-WORKDIR /app
-COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "ContextualQABot.dll"]
