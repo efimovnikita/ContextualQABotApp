@@ -523,10 +523,129 @@ public class UpdateHandler : IUpdateHandler
             "/reset_key" => ResetUserKey(_botClient, message, cancellationToken),
             "/set_key" => SetUserKey(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
             "/ask" => AskLlm(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", cancellationToken),
+            "/search_few" => SearchSimilar(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", "/search_few", 4, cancellationToken),
+            "/search_many" => SearchSimilar(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", "/search_many", 8, cancellationToken),
             "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
             "/usage" => Usage(_botClient, message, cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
+
+        async Task<Message> SearchSimilar(ITelegramBotClient botClient, Message msg, string query, string commandName, int numberOfPieces, CancellationToken token)
+        {
+            int fromId = (int) msg.From!.Id;
+            if (_storeService.IsUserFileExist(fromId) == false)
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "You must upload file first",
+                    cancellationToken: token);
+            }
+
+            if (String.IsNullOrWhiteSpace(query))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: $"Type your query after '{commandName}' keyword. Example '{commandName} give me the similar term'",
+                    cancellationToken: token);
+            }
+
+            string key = _storeService.GetOpenAiKey(fromId);
+            if (String.IsNullOrWhiteSpace(key))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "You must set Open AI API key first",
+                    cancellationToken: token);
+            }
+
+            string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+            string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+            tempDirectoryPath = execAssemblyDir;
+#endif
+            string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+            string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+            // Create the subdirectory.
+            Directory.CreateDirectory(subDirectoryPath);
+            
+            const string scriptFilename = "load_and_find_similarity.py";
+            const string scriptsFolderName = "Scripts";
+            string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+            if (System.IO.File.Exists(scriptSourcePath) == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                _logger.LogError("Python script for similarity search didn't found");
+
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking for similarity. Try again",
+                    cancellationToken: token);
+            }
+            
+            string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+            System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+            string archivePath = Path.Combine(subDirectoryPath, "db.zip");
+            bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
+            if (saveStatus == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking for similarity. Try again",
+                    cancellationToken: token);
+            }
+
+            string dbDirPath = Path.Combine(subDirectoryPath, "db");
+            
+            ZipFile.ExtractToDirectory(archivePath, dbDirPath);
+            if (Directory.Exists(dbDirPath) == false)
+            {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking for similarity. Try again",
+                    cancellationToken: token);
+            }
+            
+            string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+            if (String.IsNullOrWhiteSpace(pythonExec))
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: "Error asking for similarity. Python env var bot set. Try again",
+                    cancellationToken: token);
+            }
+
+            BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
+                .WithWorkingDirectory(subDirectoryPath)
+                .WithArguments(
+                    $"-c \"{pythonExec} '{scriptFilename}' --query '{query}' --key '{key}' --number {numberOfPieces}\"")
+                .ExecuteBufferedAsync();
+
+            string llmOutput = cmd.StandardOutput;
+
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: llmOutput,
+                replyToMessageId: msg.MessageId,
+                cancellationToken: token);
+        }
 
         async Task<Message> AskLlm(ITelegramBotClient botClient, Message msg, string query, CancellationToken token)
         {
@@ -720,6 +839,8 @@ public class UpdateHandler : IUpdateHandler
                              "/set_key     - set Open AI API key\n" +
                              "/reset_key   - reset Open AI API key\n" +
                              "/ask         - ask about something in a context of your file\n" +
+                             "/search_few  - command allows you to find a few (4) pieces of text that are similar to your prompt\n" +
+                             "/search_many - command enables you to search for many (8) pieces of text similar to your prompt\n" +
                              "/usage       - how to use this bot\n" +
                              "/reset_file  - reset file\n";
 
