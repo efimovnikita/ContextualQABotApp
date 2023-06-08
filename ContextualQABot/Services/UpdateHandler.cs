@@ -531,310 +531,308 @@ public class UpdateHandler : IUpdateHandler
             _ => Usage(_botClient, message, cancellationToken)
         };
 
-        async Task<Message> SearchSimilar(ITelegramBotClient botClient, Message msg, string query, string commandName, int numberOfPieces, CancellationToken token)
-        {
-            int fromId = (int) msg.From!.Id;
-            if (_storeService.IsUserFileExist(fromId) == false)
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "You must upload file first",
-                    cancellationToken: token);
-            }
-
-            if (String.IsNullOrWhiteSpace(query))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: $"Type your query after '{commandName}' keyword. Example '{commandName} give me the similar term'",
-                    cancellationToken: token);
-            }
-
-            string key = _storeService.GetOpenAiKey(fromId);
-            if (String.IsNullOrWhiteSpace(key))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "You must set Open AI API key first",
-                    cancellationToken: token);
-            }
-
-            string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
-            string tempDirectoryPath;
-#if RELEASE
-            tempDirectoryPath = Path.GetTempPath();
-#endif
-#if DEBUG
-            tempDirectoryPath = execAssemblyDir;
-#endif
-            string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
-            string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
-
-            // Create the subdirectory.
-            Directory.CreateDirectory(subDirectoryPath);
-            
-            const string scriptFilename = "load_and_find_similarity.py";
-            const string scriptsFolderName = "Scripts";
-            string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
-            
-            if (System.IO.File.Exists(scriptSourcePath) == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                _logger.LogError("Python script for similarity search didn't found");
-
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking for similarity. Try again",
-                    cancellationToken: token);
-            }
-            
-            string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
-            System.IO.File.Copy(scriptSourcePath, scriptDestPath);
-
-            string archivePath = Path.Combine(subDirectoryPath, "db.zip");
-            bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
-            if (saveStatus == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking for similarity. Try again",
-                    cancellationToken: token);
-            }
-
-            string dbDirPath = Path.Combine(subDirectoryPath, "db");
-            
-            ZipFile.ExtractToDirectory(archivePath, dbDirPath);
-            if (Directory.Exists(dbDirPath) == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking for similarity. Try again",
-                    cancellationToken: token);
-            }
-            
-            string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
-            if (String.IsNullOrWhiteSpace(pythonExec))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking for similarity. Python env var bot set. Try again",
-                    cancellationToken: token);
-            }
-
-            BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
-                .WithWorkingDirectory(subDirectoryPath)
-                .WithArguments(
-                    $"-c \"{pythonExec} '{scriptFilename}' --query '{query}' --key '{key}' --number {numberOfPieces}\"")
-                .ExecuteBufferedAsync();
-
-            string llmOutput = cmd.StandardOutput;
-
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-            
-            // Deserialize JSON string to a List of dictionary.
-            List<Dictionary<string, string>>? deserializedResult = JsonConvert.DeserializeObject<List<Dictionary<string, string>>>(llmOutput);
-
-            if (deserializedResult != null)
-            {
-                foreach (Dictionary<string, string> page in deserializedResult)
-                {
-                    await botClient.SendTextMessageAsync(
-                        chatId: msg.Chat.Id,
-                        text: page["page_content"],
-                        replyToMessageId: msg.MessageId,
-                        cancellationToken: token);
-                }
-            }
-
-            return await botClient.SendTextMessageAsync(
-                chatId: msg.Chat.Id,
-                text: "... end.",
-                replyToMessageId: msg.MessageId,
-                cancellationToken: token);
-        }
-
-        async Task<Message> AskLlm(ITelegramBotClient botClient, Message msg, string query, CancellationToken token)
-        {
-            int fromId = (int) msg.From!.Id;
-            if (_storeService.IsUserFileExist(fromId) == false)
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "You must upload file first",
-                    cancellationToken: token);
-            }
-
-            if (String.IsNullOrWhiteSpace(query))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Type your query after '/ask' keyword. Example '/ask give me an answer'",
-                    cancellationToken: token);
-            }
-
-            string key = _storeService.GetOpenAiKey(fromId);
-            if (String.IsNullOrWhiteSpace(key))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "You must set Open AI API key first",
-                    cancellationToken: token);
-            }
-
-            string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
-            string tempDirectoryPath;
-#if RELEASE
-            tempDirectoryPath = Path.GetTempPath();
-#endif
-#if DEBUG
-            tempDirectoryPath = execAssemblyDir;
-#endif
-            string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
-            string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
-
-            // Create the subdirectory.
-            Directory.CreateDirectory(subDirectoryPath);
-            
-            const string scriptFilename = "load_and_ask.py";
-            const string scriptsFolderName = "Scripts";
-            string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
-            
-            if (System.IO.File.Exists(scriptSourcePath) == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking LLM. Try again",
-                    cancellationToken: token);
-            }
-            
-            string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
-            System.IO.File.Copy(scriptSourcePath, scriptDestPath);
-
-            string archivePath = Path.Combine(subDirectoryPath, "db.zip");
-            bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
-            if (saveStatus == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking LLM. Try again",
-                    cancellationToken: token);
-            }
-
-            string dbDirPath = Path.Combine(subDirectoryPath, "db");
-            
-            ZipFile.ExtractToDirectory(archivePath, dbDirPath);
-            if (Directory.Exists(dbDirPath) == false)
-            {
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking LLM. Try again",
-                    cancellationToken: token);
-            }
-            
-            string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
-            if (String.IsNullOrWhiteSpace(pythonExec))
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: msg.Chat.Id,
-                    text: "Error asking LLM. Python env var bot set. Try again",
-                    cancellationToken: token);
-            }
-
-            BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
-                .WithWorkingDirectory(subDirectoryPath)
-                .WithArguments(
-                    $"-c \"{pythonExec} {scriptFilename} --query '{query}' --key '{key}'\"")
-                .ExecuteBufferedAsync();
-
-            string llmOutput = cmd.StandardOutput;
-
-#if RELEASE
-                Directory.Delete(subDirectoryPath, true);
-#endif
-
-            return await botClient.SendTextMessageAsync(
-                chatId: msg.Chat.Id,
-                text: llmOutput,
-                replyToMessageId: msg.MessageId,
-                cancellationToken: token);
-        }
-
-        async Task<Message> ResetUserFile(ITelegramBotClient botClient, Message msg, CancellationToken token)
-        {
-            int fromId = (int) msg.From!.Id;
-            _storeService.ResetFile(fromId);
-            
-            return await botClient.SendTextMessageAsync(
-                chatId: msg.Chat.Id,
-                text: "Current file was deleted",
-                cancellationToken: token);
-        }
-
-        async Task<Message> SetUserKey(ITelegramBotClient botClient, Message message1, string keyComponent,
-            CancellationToken cancellationToken1)
-        {
-            if (IsValidPattern(keyComponent) == false)
-            {
-                return await botClient.SendTextMessageAsync(
-                    chatId: message1.Chat.Id,
-                    text: "Open AI API key has invalid format. Try again",
-                    cancellationToken: cancellationToken1);
-            }
-
-            int fromId = (int) message1.From!.Id;
-            _storeService.SetOpenAiKey(fromId, keyComponent);
-
-            return await botClient.SendTextMessageAsync(
-                chatId: message1.Chat.Id,
-                text: "Open AI API key was set",
-                cancellationToken: cancellationToken1);
-        }
-
-        async Task<Message> ResetUserKey(ITelegramBotClient botClient, Message message1,
-            CancellationToken cancellationToken1)
-        {
-            int fromId = (int) message1.From!.Id;
-            _storeService.ResetOpenAiKey(fromId);
-
-            return await botClient.SendTextMessageAsync(
-                chatId: message1.Chat.Id,
-                text: "Open AI API key was reset",
-                cancellationToken: cancellationToken1);
-        }
-
-        async Task<Message> GetUserInfo(ITelegramBotClient botClient, Message msg, CancellationToken token)
-        {
-            int fromId = (int) msg.From!.Id;
-            string userInfo = _storeService.GetUserInfo(fromId);
-
-            return await botClient.SendTextMessageAsync(
-                chatId: message.Chat.Id,
-                parseMode: ParseMode.MarkdownV2,
-                text: userInfo,
-                cancellationToken: token);
-        }
-
         Message sentMessage = await action;
         _logger.LogInformation("The message was sent with id: {SentMessageId}", sentMessage.MessageId);
+    }
+
+    private async Task<Message> GetUserInfo(ITelegramBotClient botClient, Message msg, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        string userInfo = _storeService.GetUserInfo(fromId);
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            parseMode: ParseMode.MarkdownV2,
+            text: userInfo,
+            cancellationToken: token);
+    }
+
+    private async Task<Message> ResetUserKey(ITelegramBotClient botClient, Message message1, CancellationToken cancellationToken1)
+    {
+        int fromId = (int) message1.From!.Id;
+        _storeService.ResetOpenAiKey(fromId);
+
+        return await botClient.SendTextMessageAsync(
+            chatId: message1.Chat.Id,
+            text: "Open AI API key was reset",
+            cancellationToken: cancellationToken1);
+    }
+
+    private async Task<Message> SetUserKey(ITelegramBotClient botClient, Message message1, string keyComponent, CancellationToken cancellationToken1)
+    {
+        if (IsValidPattern(keyComponent) == false)
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: message1.Chat.Id,
+                text: "Open AI API key has invalid format. Try again",
+                cancellationToken: cancellationToken1);
+        }
+
+        int fromId = (int) message1.From!.Id;
+        _storeService.SetOpenAiKey(fromId, keyComponent);
+
+        return await botClient.SendTextMessageAsync(
+            chatId: message1.Chat.Id,
+            text: "Open AI API key was set",
+            cancellationToken: cancellationToken1);
+    }
+
+    private async Task<Message> ResetUserFile(ITelegramBotClient botClient, Message msg, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        _storeService.ResetFile(fromId);
+            
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "Current file was deleted",
+            cancellationToken: token);
+    }
+
+    private async Task<Message> AskLlm(ITelegramBotClient botClient, Message msg, string query, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        if (_storeService.IsUserFileExist(fromId) == false)
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must upload file first",
+                cancellationToken: token);
+        }
+
+        if (String.IsNullOrWhiteSpace(query))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Type your query after '/ask' keyword. Example '/ask give me an answer'",
+                cancellationToken: token);
+        }
+
+        string key = _storeService.GetOpenAiKey(fromId);
+        if (String.IsNullOrWhiteSpace(key))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must set Open AI API key first",
+                cancellationToken: token);
+        }
+
+        string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+        string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+        tempDirectoryPath = execAssemblyDir;
+#endif
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+            
+        const string scriptFilename = "load_and_ask.py";
+        const string scriptsFolderName = "Scripts";
+        string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+        if (System.IO.File.Exists(scriptSourcePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking LLM. Try again",
+                cancellationToken: token);
+        }
+            
+        string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+        System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+        string archivePath = Path.Combine(subDirectoryPath, "db.zip");
+        bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
+        if (saveStatus == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking LLM. Try again",
+                cancellationToken: token);
+        }
+
+        string dbDirPath = Path.Combine(subDirectoryPath, "db");
+            
+        ZipFile.ExtractToDirectory(archivePath, dbDirPath);
+        if (Directory.Exists(dbDirPath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking LLM. Try again",
+                cancellationToken: token);
+        }
+            
+        string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+        if (String.IsNullOrWhiteSpace(pythonExec))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking LLM. Python env var bot set. Try again",
+                cancellationToken: token);
+        }
+
+        BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(subDirectoryPath)
+            .WithArguments(
+                $"-c \"{pythonExec} {scriptFilename} --query '{query}' --key '{key}'\"")
+            .ExecuteBufferedAsync();
+
+        string llmOutput = cmd.StandardOutput;
+
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: llmOutput,
+            replyToMessageId: msg.MessageId,
+            cancellationToken: token);
+    }
+
+    private async Task<Message> SearchSimilar(ITelegramBotClient botClient, Message msg, string query, string commandName, int numberOfPieces, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        if (_storeService.IsUserFileExist(fromId) == false)
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must upload file first",
+                cancellationToken: token);
+        }
+
+        if (String.IsNullOrWhiteSpace(query))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: $"Type your query after '{commandName}' keyword. Example '{commandName} give me the similar term'",
+                cancellationToken: token);
+        }
+
+        string key = _storeService.GetOpenAiKey(fromId);
+        if (String.IsNullOrWhiteSpace(key))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must set Open AI API key first",
+                cancellationToken: token);
+        }
+
+        string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+        string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+        tempDirectoryPath = execAssemblyDir;
+#endif
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+            
+        const string scriptFilename = "load_and_find_similarity.py";
+        const string scriptsFolderName = "Scripts";
+        string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+        if (System.IO.File.Exists(scriptSourcePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            _logger.LogError("Python script for similarity search didn't found");
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking for similarity. Try again",
+                cancellationToken: token);
+        }
+            
+        string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+        System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+        string archivePath = Path.Combine(subDirectoryPath, "db.zip");
+        bool saveStatus = _storeService.SaveUserFile(fromId, archivePath);
+        if (saveStatus == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking for similarity. Try again",
+                cancellationToken: token);
+        }
+
+        string dbDirPath = Path.Combine(subDirectoryPath, "db");
+            
+        ZipFile.ExtractToDirectory(archivePath, dbDirPath);
+        if (Directory.Exists(dbDirPath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking for similarity. Try again",
+                cancellationToken: token);
+        }
+            
+        string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+        if (String.IsNullOrWhiteSpace(pythonExec))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error asking for similarity. Python env var bot set. Try again",
+                cancellationToken: token);
+        }
+
+        BufferedCommandResult cmd = await Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(subDirectoryPath)
+            .WithArguments(
+                $"-c \"{pythonExec} '{scriptFilename}' --query '{query}' --key '{key}' --number {numberOfPieces}\"")
+            .ExecuteBufferedAsync();
+
+        string llmOutput = cmd.StandardOutput;
+
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            
+        // Deserialize JSON string to a List of dictionary.
+        List<Dictionary<string, string>>? deserializedResult = JsonConvert.DeserializeObject<List<Dictionary<string, string>>>(llmOutput);
+
+        if (deserializedResult != null)
+        {
+            foreach (Dictionary<string, string> page in deserializedResult)
+            {
+                await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: page["page_content"],
+                    replyToMessageId: msg.MessageId,
+                    cancellationToken: token);
+            }
+        }
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "... end.",
+            replyToMessageId: msg.MessageId,
+            cancellationToken: token);
     }
 
     private static bool IsValidPattern(string input)
