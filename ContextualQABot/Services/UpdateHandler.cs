@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using CliWrap;
 using CliWrap.Buffered;
 using ContextualQABot.Abstract;
+using HtmlAgilityPack;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Telegram.Bot;
@@ -530,11 +531,174 @@ public class UpdateHandler : IUpdateHandler
             "/usage" => Usage(_botClient, message, cancellationToken),
             "/formats" => Formats(_botClient, message, cancellationToken),
             "/help" => Help(_botClient, message, cancellationToken),
+            "/url" => ConsumeUrl(_botClient, message, split.Length > 1 ? split[1] : "", cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
 
         Message sentMessage = await action;
         _logger.LogInformation("The message was sent with id: {SentMessageId}", sentMessage.MessageId);
+    }
+
+    private async Task<Message> ConsumeUrl(ITelegramBotClient botClient, Message msg, string input, CancellationToken token)
+    {
+        try
+        {
+            string? url = ExtractUrl(input);
+            if (String.IsNullOrWhiteSpace(url))
+            {
+                throw new Exception("Url didn't found");
+            }
+
+            if (IsUrlFromYouTube(url))
+            {
+                return await ProcessYtLink(botClient, msg, url, token);
+            }
+
+            throw new Exception("This domain is not supported");
+        }
+        catch (Exception e)
+        {
+            if (e.Message.Length < 4000)
+            {
+                return await botClient.SendTextMessageAsync(
+                    chatId: msg.Chat.Id,
+                    text: e.Message,
+                    cancellationToken: token);
+            }
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error while extraction content from url",
+                cancellationToken: token);
+        }
+    }
+
+    private async Task<Message> ProcessYtLink(ITelegramBotClient botClient, Message msg, string url, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        string key = _storeService.GetOpenAiKey(fromId);
+        if (String.IsNullOrWhiteSpace(key))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must set Open AI API key first",
+                cancellationToken: token);
+        }
+        
+        string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+        string tempDirectoryPath = Path.GetTempPath();
+
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+            
+        // Create sources folder inside temp dir
+        string sourcesDir = Path.Combine(subDirectoryPath, "sources");
+        Directory.CreateDirectory(sourcesDir);
+
+        const string scriptFilename = "create_storage_from_yt.py";
+        const string scriptsFolderName = "Scripts";
+        string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+        if (System.IO.File.Exists(scriptSourcePath) == false)
+        {
+            Directory.Delete(subDirectoryPath, true);
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming youtube content. Try again",
+                cancellationToken: token);
+        }
+            
+        string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+        System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+        string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+        if (String.IsNullOrWhiteSpace(pythonExec))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming youtube content. Python env var bot set. Try again",
+                cancellationToken: token);
+        }
+
+        Command cmd = Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(subDirectoryPath)
+            .WithEnvironmentVariables(new Dictionary<string, string?>(1) { { "OPENAI_API_KEY", key } })
+            .WithArguments(
+                $"-c \"{pythonExec} {scriptFilename} --url '{url}'\"");
+        await cmd.ExecuteBufferedAsync();
+
+        const string dbFolderName = "db";
+        string dbFolderPath = Path.Combine(subDirectoryPath, dbFolderName);
+            
+        if (Directory.Exists(dbFolderPath) == false)
+        {
+            Directory.Delete(subDirectoryPath, true);
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming youtube content. Try again",
+                cancellationToken: token);
+        }
+
+        string dbArchivePath = Path.Combine(subDirectoryPath, $"{dbFolderName}.zip");
+        ZipFile.CreateFromDirectory(dbFolderPath, dbArchivePath);
+
+        if (System.IO.File.Exists(dbArchivePath) == false)
+        {
+            Directory.Delete(subDirectoryPath, true);
+
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming youtube content. Try again",
+                cancellationToken: token);
+        }
+        
+        string? title = await GetWebPageTitle(url);
+
+        _storeService.SetFile((int) msg.From!.Id, 
+            String.IsNullOrWhiteSpace(title) == false ? title : "Youtube video content", 
+            new FileInfo(dbArchivePath));
+            
+        Directory.Delete(subDirectoryPath, true);
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "Content from youtube video was set",
+            cancellationToken: token);
+    }
+
+    private static async Task<string?> GetWebPageTitle(string url)
+    {
+        using HttpClient httpClient = new();
+        string html = await httpClient.GetStringAsync(url);
+        HtmlDocument htmlDocument = new();
+        htmlDocument.LoadHtml(html);
+
+        HtmlNode? titleNode = htmlDocument.DocumentNode.SelectSingleNode("//head/title");
+        return titleNode?.InnerText;
+    }
+
+    private static bool IsUrlFromYouTube(string url)
+    {
+        Uri uri = new(url);
+        return uri.Host.Contains("youtu.be") || uri.Host.Contains("youtube.com");
+    }
+
+    private static string? ExtractUrl(string input)
+    {
+        if (String.IsNullOrEmpty(input))
+        {
+            return null;
+        }
+
+        const string pattern = @"^(https?|ftp|file):\/\/[-A-Za-z0-9+&@#\/%?=~_|!:,.;]*[-A-Za-z0-9+&@#\/%=~_|]";
+        Match match = new Regex(pattern, RegexOptions.IgnoreCase).Match(input);
+
+        return match.Success ? match.Value : null;
     }
 
     private async Task<Message> Help(ITelegramBotClient botClient, Message msg, CancellationToken token)
@@ -881,6 +1045,7 @@ public class UpdateHandler : IUpdateHandler
                              "/usage       - how to use this bot\n" +
                              "/formats     - list of supported formats\n" +
                              "/help        - help and 'how-to' info\n" +
+                             "/url         - consume content from url\n" +
                              "/reset_file  - reset file\n";
 
         return await botClient.SendTextMessageAsync(
