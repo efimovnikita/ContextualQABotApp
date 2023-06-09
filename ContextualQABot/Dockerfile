@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN apt-get update && apt-get install -y python3 python3-pip
 RUN pip install --no-cache-dir -r requirements.txt
 RUN apt-get install libchm-bin -y
+RUN apt-get install -y ffmpeg
 RUN which python3
 
 ENTRYPOINT ["dotnet", "ContextualQABot.dll"]
