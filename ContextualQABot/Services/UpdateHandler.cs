@@ -528,11 +528,34 @@ public class UpdateHandler : IUpdateHandler
             "/search_many" => SearchSimilar(_botClient, message, split.Length > 1 ? String.Join(" ", split.Skip(1)) : "", "/search_many", 8, cancellationToken),
             "/reset_file" => ResetUserFile(_botClient, message, cancellationToken),
             "/usage" => Usage(_botClient, message, cancellationToken),
+            "/formats" => Formats(_botClient, message, cancellationToken),
+            "/help" => Help(_botClient, message, cancellationToken),
             _ => Usage(_botClient, message, cancellationToken)
         };
 
         Message sentMessage = await action;
         _logger.LogInformation("The message was sent with id: {SentMessageId}", sentMessage.MessageId);
+    }
+
+    private async Task<Message> Help(ITelegramBotClient botClient, Message msg, CancellationToken token)
+    {
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "*Basic bot usage*:\n1\\. Set OpenAI API key: `/set_key <key>`\n2\\. Upload your file \\(drag&drop the file or select from the disk\\)\n3\\. Ask your question: `/ask <question>`\n4\\. Search something: `/search_few <query>`\n5\\. Search in the wider context: `/search_many <query>`",
+            parseMode: ParseMode.MarkdownV2,
+            replyMarkup: 
+            new InlineKeyboardMarkup(InlineKeyboardButton
+                .WithUrl("Watch the video about basic bot usage",
+                url: "https://youtu.be/oUmGs-An5rI")),
+            cancellationToken: token);
+    }
+
+    private async Task<Message> Formats(ITelegramBotClient botClient, Message msg, CancellationToken token)
+    {
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "Bot supports next file formats: *.txt, *.pdf, *.chm",
+            cancellationToken: token);
     }
 
     private async Task<Message> GetUserInfo(ITelegramBotClient botClient, Message msg, CancellationToken token)
@@ -856,6 +879,8 @@ public class UpdateHandler : IUpdateHandler
                              "/search_few  - command allows you to find a few (4) pieces of text that are similar to your prompt\n" +
                              "/search_many - command enables you to search for many (8) pieces of text similar to your prompt\n" +
                              "/usage       - how to use this bot\n" +
+                             "/formats     - list of supported formats\n" +
+                             "/help        - help and 'how-to' info\n" +
                              "/reset_file  - reset file\n";
 
         return await botClient.SendTextMessageAsync(
