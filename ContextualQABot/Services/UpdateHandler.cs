@@ -710,7 +710,7 @@ public class UpdateHandler : IUpdateHandler
             replyMarkup: 
             new InlineKeyboardMarkup(InlineKeyboardButton
                 .WithUrl("Watch the video about basic bot usage",
-                url: "https://youtu.be/oUmGs-An5rI")),
+                url: "https://youtu.be/NZ4zlJZRvQA")),
             cancellationToken: token);
     }
 
