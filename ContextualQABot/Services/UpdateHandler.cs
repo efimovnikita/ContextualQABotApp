@@ -543,6 +543,11 @@ public class UpdateHandler : IUpdateHandler
     {
         try
         {
+            if (String.IsNullOrWhiteSpace(input))
+            {            
+                throw new Exception("Type your url after '/url' keyword.");
+            }    
+            
             string? url = ExtractUrl(input);
             if (String.IsNullOrWhiteSpace(url))
             {
@@ -553,8 +558,8 @@ public class UpdateHandler : IUpdateHandler
             {
                 return await ProcessYtLink(botClient, msg, url, token);
             }
-
-            throw new Exception("This domain is not supported");
+            
+            return await ProcessGenericLink(botClient, msg, url, token);
         }
         catch (Exception e)
         {
@@ -571,6 +576,139 @@ public class UpdateHandler : IUpdateHandler
                 text: "Error while extraction content from url",
                 cancellationToken: token);
         }
+    }
+
+    private static async Task SaveUrlAsHtml(string url, string fullpath)
+    {
+        using HttpClient client = new();
+        string html = await client.GetStringAsync(url);
+
+        using (StreamWriter writer = new(fullpath))
+        {
+            await writer.WriteAsync(html);
+        }
+    }
+
+    private async Task<Message> ProcessGenericLink(ITelegramBotClient botClient, Message msg, string url, CancellationToken token)
+    {
+        int fromId = (int) msg.From!.Id;
+        string key = _storeService.GetOpenAiKey(fromId);
+        if (String.IsNullOrWhiteSpace(key))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "You must set Open AI API key first",
+                cancellationToken: token);
+        }
+        
+        string execAssemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+        string tempDirectoryPath;
+#if RELEASE
+            tempDirectoryPath = Path.GetTempPath();
+#endif
+#if DEBUG
+        tempDirectoryPath = execAssemblyDir;
+#endif
+        string randomSubfolderName = Path.GetRandomFileName(); // Generate a random folder name
+        string subDirectoryPath = Path.Combine(tempDirectoryPath, randomSubfolderName);
+
+        // Create the subdirectory.
+        Directory.CreateDirectory(subDirectoryPath);
+            
+        // Create sources folder inside temp dir
+        string sourcesDir = Path.Combine(subDirectoryPath, "sources");
+        Directory.CreateDirectory(sourcesDir);
+
+        string filePath = Path.Combine(sourcesDir, "link.htm");
+
+        await SaveUrlAsHtml(url, fullpath: filePath);
+
+        if (System.IO.File.Exists(filePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming link. Try again",
+                cancellationToken: token);
+        }
+
+        const string scriptFilename = "create_storage_from_htms.py";
+        const string scriptsFolderName = "Scripts";
+        string scriptSourcePath = Path.Combine(execAssemblyDir, scriptsFolderName, scriptFilename);
+            
+        if (System.IO.File.Exists(scriptSourcePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming link. Try again",
+                cancellationToken: token);
+        }
+            
+        string scriptDestPath = Path.Combine(subDirectoryPath, scriptFilename);
+        System.IO.File.Copy(scriptSourcePath, scriptDestPath);
+
+        string? pythonExec = Environment.GetEnvironmentVariable("PYTHON");
+        if (String.IsNullOrWhiteSpace(pythonExec))
+        {
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming link. Python env var bot set. Try again",
+                cancellationToken: token);
+        }
+
+        Command cmd = Cli.Wrap("/bin/bash")
+            .WithWorkingDirectory(subDirectoryPath)
+            .WithArguments(
+                $"-c \"{pythonExec} {scriptFilename} --folder '{sourcesDir}' --key '{key}'\"");
+        await cmd.ExecuteBufferedAsync();
+        
+        const string dbFolderName = "db";
+        string dbFolderPath = Path.Combine(subDirectoryPath, dbFolderName);
+            
+        if (Directory.Exists(dbFolderPath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming link. Try again",
+                cancellationToken: token);
+        }
+
+        string dbArchivePath = Path.Combine(subDirectoryPath, $"{dbFolderName}.zip");
+        ZipFile.CreateFromDirectory(dbFolderPath, dbArchivePath);
+
+        if (System.IO.File.Exists(dbArchivePath) == false)
+        {
+#if RELEASE
+                Directory.Delete(subDirectoryPath, true);
+#endif
+            return await botClient.SendTextMessageAsync(
+                chatId: msg.Chat.Id,
+                text: "Error consuming link. Try again",
+                cancellationToken: token);
+        }
+        
+        string? title = await GetWebPageTitle(url);
+
+        _storeService.SetFile((int) msg.From!.Id, 
+            label: String.IsNullOrWhiteSpace(title) == false ? title : "Content from web page", 
+            new FileInfo(dbArchivePath));
+            
+#if RELEASE
+            Directory.Delete(subDirectoryPath, true);
+#endif
+
+        return await botClient.SendTextMessageAsync(
+            chatId: msg.Chat.Id,
+            text: "Link was consumed",
+            cancellationToken: token);
     }
 
     private async Task<Message> ProcessYtLink(ITelegramBotClient botClient, Message msg, string url, CancellationToken token)
@@ -705,7 +843,7 @@ public class UpdateHandler : IUpdateHandler
     {
         return await botClient.SendTextMessageAsync(
             chatId: msg.Chat.Id,
-            text: "*Basic bot usage*:\n1\\. Set OpenAI API key: `/set_key <key>`\n2\\. Upload your file \\(drag&drop the file or select from the disk\\)\n3\\. Ask your question: `/ask <question>`\n4\\. Search something: `/search_few <query>`\n5\\. Search in the wider context: `/search_many <query>`",
+            text: "*Basic bot usage*:\n1\\. Set OpenAI API key: `/set_key <key>`\n2\\. Upload your file \\(drag&drop the file or select from the disk\\)\n3\\. Ask your question: `/ask <question>`\n4\\. Search something: `/search_few <query>`\n5\\. Search in the wider context: `/search_many <query>`\n6\\. Set url as context: `/url <link>`",
             parseMode: ParseMode.MarkdownV2,
             replyMarkup: 
             new InlineKeyboardMarkup(InlineKeyboardButton

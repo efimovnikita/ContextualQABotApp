@@ -27,7 +27,7 @@ for filename in os.listdir(args.folder):
         for d in docs:
             documents.append(d)
 
-text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
+text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50, separator=" ")
 texts = text_splitter.split_documents(documents=documents)
 
 persist_directory = 'db'
